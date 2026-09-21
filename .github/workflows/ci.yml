@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DINKSTER_CORE_REVISION: 833d3a3b4259ceab51c4fff97505d24b02d63355
+
+jobs:
+  core-access:
+    name: private core access
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.access.outputs.available }}
+    steps:
+      - name: Detect private core access
+        id: access
+        env:
+          DINKSTER_CORE_READ_KEY: ${{ secrets.DINKSTER_CORE_READ_KEY }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Private core validation: not run (fork pull request)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$DINKSTER_CORE_READ_KEY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Private core validation: not run (DINKSTER_CORE_READ_KEY is unavailable)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  validation:
+    name: format, lint, types and tests
+    needs: core-access
+    if: needs.core-access.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout Dinkster core
+        uses: actions/checkout@v4
+        with:
+          repository: Kosinkadink/Dinkster
+          ref: ${{ env.DINKSTER_CORE_REVISION }}
+          path: .dinkster
+          ssh-key: ${{ secrets.DINKSTER_CORE_READ_KEY }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --project .dinkster --locked
+      - run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
+      - run: uvx ruff==0.15.22 format --check src tests
+      - run: uvx ruff==0.15.22 check src tests
+      - run: uvx pyright==1.1.411
+      - run: .dinkster/.venv/bin/python -m pytest -q
+
+  artifact-smoke:
+    name: artifact smoke (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: core-access
+    if: needs.core-access.outputs.available == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout Dinkster core
+        uses: actions/checkout@v4
+        with:
+          repository: Kosinkadink/Dinkster
+          ref: ${{ env.DINKSTER_CORE_REVISION }}
+          path: .dinkster
+          ssh-key: ${{ secrets.DINKSTER_CORE_READ_KEY }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --project .dinkster --locked --package dinkster-p2p
+      - run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
+      - run: cp .dinkster/uv.lock uv.lock
+        if: runner.os != 'Windows'
+      - run: Copy-Item .dinkster/uv.lock uv.lock
+        if: runner.os == 'Windows'
+      - run: .dinkster/.venv/bin/python -m pytest -q tests/test_p2p_artifact_smoke.py
