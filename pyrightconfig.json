@@ -1,0 +1,11 @@
+{
+  "include": ["src"],
+  "exclude": [".dinkster"],
+  "pythonVersion": "3.12",
+  "venvPath": ".dinkster",
+  "venv": ".venv",
+  "extraPaths": [
+    ".dinkster/packages/dinkster-assets/src",
+    ".dinkster/packages/dinkster-workers/src"
+  ]
+}
