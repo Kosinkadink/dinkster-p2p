@@ -11,11 +11,36 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DINKSTER_CORE_REVISION: 444328290949f58d0693ca2b4491b1c55817db1a
+  DINKSTER_CORE_REVISION: 833d3a3b4259ceab51c4fff97505d24b02d63355
 
 jobs:
+  core-access:
+    name: private core access
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.access.outputs.available }}
+    steps:
+      - name: Detect private core access
+        id: access
+        env:
+          DINKSTER_CORE_READ_KEY: ${{ secrets.DINKSTER_CORE_READ_KEY }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Private core validation: not run (fork pull request)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$DINKSTER_CORE_READ_KEY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Private core validation: not run (DINKSTER_CORE_READ_KEY is unavailable)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
   validation:
     name: format, lint, types and tests
+    needs: core-access
+    if: needs.core-access.outputs.available == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -39,6 +64,8 @@ jobs:
 
   artifact-smoke:
     name: artifact smoke (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: core-access
+    if: needs.core-access.outputs.available == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
