@@ -25,7 +25,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dinkster_p2p"]
-
-[tool.uv.sources]
-dinkster-assets = { workspace = true }
-dinkster-workers = { workspace = true }
