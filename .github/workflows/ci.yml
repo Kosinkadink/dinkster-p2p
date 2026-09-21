@@ -45,7 +45,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Checkout Dinkster core
+        uses: actions/checkout@v4
         with:
           repository: Kosinkadink/Dinkster
           ref: ${{ env.DINKSTER_CORE_REVISION }}
@@ -75,7 +76,8 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - name: Checkout Dinkster core
+        uses: actions/checkout@v4
         with:
           repository: Kosinkadink/Dinkster
           ref: ${{ env.DINKSTER_CORE_REVISION }}
