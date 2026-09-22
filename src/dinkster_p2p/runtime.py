@@ -33,6 +33,7 @@ from dinkster_assets import (
     derive_p2p_descriptor,
     verify_p2p_descriptor,
 )
+from dinkster_assets.p2p_storage import cached_p2p_local_file, verified_p2p_seed_descriptor
 from dinkster_workers.boundary import BoundaryError, read_frame, write_frame
 from dinkster_workers.transport import connect_endpoint
 
@@ -55,7 +56,6 @@ _DIGEST = re.compile(r"^blake3:[0-9a-f]{64}$")
 _GRANT_ID = re.compile(r"^[0-9a-f]{64}$")
 _TRANSFER_OVERRIDES = frozenset({"paused", "stopped"})
 MAX_ACTIVE_DOWNLOADS = 4
-MAX_ACTIVE_SEEDS = 64
 
 
 class SidecarError(RuntimeError):
@@ -373,9 +373,9 @@ def session_settings(
     global_active = plan.global_active
     lan_active = plan.lan_active and bool(policy.interfaces)
     listen = (
-        "0.0.0.0:0"
+        f"0.0.0.0:{settings.get('listenPort', 0)}"
         if global_active
-        else ",".join(f"{address}:0l" for address in policy.addresses)
+        else ",".join(f"{address}:{settings.get('listenPort', 0)}l" for address in policy.addresses)
         if lan_active
         else ""
     )
@@ -551,6 +551,7 @@ class SidecarRuntime:
         self._diagnostics = NativeDiagnostics()
         self._listener_errors: list[str] = []
         self._listeners = ListenerBindings(self._record_listener_error)
+        self._alert_batch_active = False
         self._global_pex_loaded = False
         self._session: Any = None
         self._global: GlobalTransferController | None = None
@@ -699,6 +700,11 @@ class SidecarRuntime:
             raise SidecarError("global session features require lan-and-internet scope")
         self._session_plan = plan
         plan = P2PSessionPlan() if self._paused or self._network_paused else self._session_plan
+        desired_interfaces = cast(
+            str, session_settings(self.settings, self._network_policy, plan)["listen_interfaces"]
+        )
+        if self._listeners.requires_closed_transition(desired_interfaces):
+            self._close_and_drain_listener_template()
         apply_session_plan(
             self._session,
             self._lt,
@@ -726,6 +732,21 @@ class SidecarRuntime:
                     torrent_flags_for_plan(self._lt, plan, scope=scope),
                     mask,
                 )
+
+    def _close_and_drain_listener_template(self) -> None:
+        if self._alert_batch_active:
+            raise SidecarError("listener template transition cannot drain a borrowed alert batch")
+        self._listeners.configure("")
+        self._session.apply_settings({"listen_interfaces": ""})
+        if self._session.get_settings()["listen_interfaces"] != "":
+            raise SidecarError("libtorrent did not close the previous listener template")
+        self._alert_batch_active = True
+        try:
+            for alert in self._session.pop_alerts():
+                self._handle_alert(alert)
+        finally:
+            self._alert_batch_active = False
+        self._listeners = ListenerBindings(self._record_listener_error)
 
     def _apply_torrent_policy(self) -> None:
         if self._paused or self._network_paused:
@@ -1004,6 +1025,8 @@ class SidecarRuntime:
                 or derived.descriptor != lease.descriptor
             ):
                 raise SidecarError("seed lease descriptor changed during activation")
+            # Failed seed verification must not download repairs into the source file.
+            params.flags |= self._lt.torrent_flags.seed_mode | self._lt.torrent_flags.upload_mode
             metadata: dict[bytes, object] = {b"info": self._lt.bdecode(derived.info)}
             if derived.piece_layer:
                 metadata[b"piece layers"] = {
@@ -1270,8 +1293,14 @@ class SidecarRuntime:
                 torrent.published_path = str(path)
 
     def poll_alerts(self) -> None:
-        for alert in self._session.pop_alerts():
-            self._handle_alert(alert)
+        if getattr(self, "_alert_batch_active", False):
+            raise SidecarError("alert polling cannot borrow a second native alert batch")
+        self._alert_batch_active = True
+        try:
+            for alert in self._session.pop_alerts():
+                self._handle_alert(alert)
+        finally:
+            self._alert_batch_active = False
         for torrent in self._torrents.values():
             lease = torrent.lease
             expires_at = max(
@@ -1798,14 +1827,14 @@ class SidecarRuntime:
         if before.st_size != lease.size_bytes:
             raise SidecarError("seed lease localPath size does not match sizeBytes")
         try:
-            if lease.scope == "lan-and-internet":
-                self._vault.verify_p2p_local_file(
-                    lease.digest,
-                    lease.size_bytes,
-                    lease.local_path,
-                    P2P_FORMAT_POLICY_VERSION,
-                ).require_current()
-            derived = derive_p2p_descriptor(lease.local_path)
+            derived = (
+                verified_p2p_seed_descriptor(
+                    self._vault.root, lease.digest, lease.size_bytes, lease.local_path
+                )
+                if lease.scope == "lan-and-internet"
+                or cached_p2p_local_file(self._vault.root, lease.local_path) is not None
+                else derive_p2p_descriptor(lease.local_path)
+            )
             if (
                 derived.asset_digest != lease.digest
                 or derived.size != lease.size_bytes
@@ -1843,7 +1872,6 @@ class SidecarRuntime:
             and not self._network_policy.allows_peer(lease.peer_address)
         ):
             raise SidecarError("download lease peer hint is outside the active LAN")
-        seed_descriptor = self._verify_seed(lease) if isinstance(lease, SeedLease) else None
         existing = self._leases.get(lease.lease_id)
         if existing is not None and existing != lease:
             raise SidecarError("leaseId is already bound to a different lease")
@@ -1861,7 +1889,11 @@ class SidecarRuntime:
             for current in self._leases.values()
         ):
             raise SidecarError("one active torrent per digest is permitted")
-        limit = MAX_ACTIVE_DOWNLOADS if isinstance(lease, DownloadLease) else MAX_ACTIVE_SEEDS
+        limit = (
+            MAX_ACTIVE_DOWNLOADS
+            if isinstance(lease, DownloadLease)
+            else cast(int, self.settings["maxActiveSeeds"])
+        )
         active_lan = sum(
             isinstance(current.lease, type(lease)) and not current.stopped
             for current in self._torrents.values()
@@ -1870,8 +1902,17 @@ class SidecarRuntime:
             isinstance(current, type(lease)) and current.scope == "lan-and-internet"
             for current in self._leases.values()
         )
-        if existing is None and active_lan + active_global >= limit:
+        shared_runtime = self._torrent_for_digest(lease.digest)
+        already_counted = (
+            existing is not None
+            if lease.scope == "lan-and-internet"
+            else shared_runtime is not None
+            and isinstance(shared_runtime.lease, type(lease))
+            and not shared_runtime.stopped
+        )
+        if not already_counted and active_lan + active_global >= limit:
             raise SidecarError(f"active {kind} lease limit reached")
+        seed_descriptor = self._verify_seed(lease) if isinstance(lease, SeedLease) else None
         if isinstance(lease, DownloadLease):
             self._require_staging_budget(lease)
         new_activity = lease.digest not in self._activity
@@ -1910,7 +1951,6 @@ class SidecarRuntime:
                 self._recovery = recovery
                 raise SidecarError(f"global lease activation failed: {error}") from error
             return self._lease_status(lease)
-        shared_runtime = self._torrent_for_digest(lease.digest)
         if (
             isinstance(lease, SeedLease)
             and shared_runtime is not None

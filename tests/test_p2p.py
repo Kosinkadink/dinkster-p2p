@@ -147,6 +147,8 @@ def test_p2p_defaults_disable_transport_with_budgets() -> None:
         "internetSeedRatio": 1.0,
         "internetSeedTimeSeconds": 86_400,
         "stagingBudgetBytes": 64 * 1024**3,
+        "maxActiveSeeds": 64,
+        "listenPort": 0,
     }
     assert len(LIBTORRENT_ARTIFACTS) == 8
     assert {key[0] for key in LIBTORRENT_ARTIFACTS} == {"linux", "win32", "darwin"}

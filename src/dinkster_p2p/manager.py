@@ -424,7 +424,7 @@ class P2PSidecarManager:
             return await self._grant_global_locked(authorization)
 
     async def reconcile_global(
-        self, authorizations: Sequence[AuthorizedGlobalLease]
+        self, authorizations: Sequence[AuthorizedGlobalLease], *, revoke_only: bool = False
     ) -> dict[str, tuple[str, ...]]:
         """Replace active internet authority with one current provider snapshot."""
         desired: dict[str, AuthorizedGlobalLease] = {}
@@ -450,6 +450,8 @@ class P2PSidecarManager:
                 await self._request_with_recovery_locked("revoke", {"leaseId": lease_id})
                 self._global_authorizations.pop(lease_id, None)
                 revoked.append(lease_id)
+            if revoke_only:
+                return {"granted": (), "revoked": tuple(revoked)}
             for lease_id, authorization in desired.items():
                 if self._global_authorizations.get(lease_id) == authorization:
                     continue
