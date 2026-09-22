@@ -27,7 +27,7 @@ from .runtime import IPC_VERSION
 from .settings import default_p2p_settings, normalize_p2p_settings
 
 # Startup and control operations verify or persist the configured seed set.
-_CONNECT_TIMEOUT_SECONDS = 120.0
+_CONNECT_TIMEOUT_SECONDS = 900.0
 _REQUEST_TIMEOUT_SECONDS = 120.0
 _STOP_TIMEOUT_SECONDS = 10.0
 _RESTART_LIMIT = 3
