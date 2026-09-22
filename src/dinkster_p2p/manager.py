@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -424,6 +425,18 @@ class P2PSidecarManager:
                 raise P2PManagerError("P2P sidecar is not running")
             return await self._grant_global_locked(authorization)
 
+    @staticmethod
+    def _is_seed_renewal(current: AuthorizedGlobalLease, desired: AuthorizedGlobalLease) -> bool:
+        old = current.lease
+        new = desired.lease
+        return bool(
+            current.trackers == desired.trackers
+            and isinstance(old, SeedLease)
+            and isinstance(new, SeedLease)
+            and old.grant_ids == new.grant_ids
+            and replace(old, expires_at=new.expires_at) == new
+        )
+
     async def reconcile_global(
         self, authorizations: Sequence[AuthorizedGlobalLease], *, revoke_only: bool = False
     ) -> dict[str, tuple[str, ...]]:
@@ -446,7 +459,10 @@ class P2PSidecarManager:
         revoked: list[str] = []
         async with self._lock:
             for lease_id, current in tuple(self._global_authorizations.items()):
-                if desired.get(lease_id) == current:
+                replacement = desired.get(lease_id)
+                if replacement == current or (
+                    replacement is not None and self._is_seed_renewal(current, replacement)
+                ):
                     continue
                 await self._request_with_recovery_locked("revoke", {"leaseId": lease_id})
                 self._global_authorizations.pop(lease_id, None)

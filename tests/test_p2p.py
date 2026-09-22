@@ -44,12 +44,14 @@ from dinkster_p2p import (
 )
 from dinkster_p2p import manager as p2p_manager
 from dinkster_p2p import runtime as p2p_runtime
+from dinkster_p2p.global_leases import _AUTHORITY, AuthorizedGlobalLease
 from dinkster_p2p.runtime import (
     SidecarError,
     SidecarRuntime,
     StateLock,
     StateLockError,
 )
+from tests.p2p_global_fixtures import build_provider_fixture
 
 SEED_GRANT_ID = "a" * 64
 INTERNET_SEED_GRANT_ID = "b" * 64
@@ -58,6 +60,41 @@ INTERNET_SEED_GRANT_ID = "b" * 64
 def test_sidecar_startup_and_operations_use_four_hour_bounds() -> None:
     assert p2p_manager._CONNECT_TIMEOUT_SECONDS == 4 * 60 * 60
     assert p2p_manager._REQUEST_TIMEOUT_SECONDS == 4 * 60 * 60
+
+
+def test_global_seed_expiry_renewal_does_not_revoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        fixture = build_provider_fixture(tmp_path / "fixture")
+        current = fixture.authorizations()[0]
+        later = fixture.observed_at + 60
+        monkeypatch.setattr("dinkster_p2p.global_leases.time.time", lambda: later)
+        renewed = AuthorizedGlobalLease(
+            replace(current.lease, expires_at=current.lease.expires_at + 60),
+            current.trackers,
+            _AUTHORITY,
+        )
+        manager = P2PSidecarManager(vault_root=tmp_path / "vault")
+        internal = cast(Any, manager)
+        operations: list[str] = []
+
+        async def request(operation: str, _body: object) -> dict[str, Any]:
+            operations.append(operation)
+            return {}
+
+        internal._process = object()
+        internal._request_with_recovery_locked = request
+        await manager.reconcile_global((current,))
+        operations.clear()
+
+        result = await manager.reconcile_global((renewed,))
+
+        assert result == {"granted": (renewed.lease.lease_id,), "revoked": ()}
+        assert operations == ["grant-global"]
+        assert internal._global_authorizations == {renewed.lease.lease_id: renewed}
+
+    asyncio.run(scenario())
 
 
 def enabled_settings(*, downloads: bool = False, seeding: bool = False) -> dict[str, object]:
