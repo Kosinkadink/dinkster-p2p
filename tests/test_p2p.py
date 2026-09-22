@@ -42,6 +42,7 @@ from dinkster_p2p import (
     seed_lease_from_wire,
     select_libtorrent_artifact,
 )
+from dinkster_p2p import manager as p2p_manager
 from dinkster_p2p import runtime as p2p_runtime
 from dinkster_p2p.runtime import (
     SidecarError,
@@ -52,6 +53,11 @@ from dinkster_p2p.runtime import (
 
 SEED_GRANT_ID = "a" * 64
 INTERNET_SEED_GRANT_ID = "b" * 64
+
+
+def test_sidecar_startup_and_operations_use_four_hour_bounds() -> None:
+    assert p2p_manager._CONNECT_TIMEOUT_SECONDS == 4 * 60 * 60
+    assert p2p_manager._REQUEST_TIMEOUT_SECONDS == 4 * 60 * 60
 
 
 def enabled_settings(*, downloads: bool = False, seeding: bool = False) -> dict[str, object]:

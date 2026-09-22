@@ -26,9 +26,9 @@ from .global_leases import AuthorizedGlobalLease
 from .runtime import IPC_VERSION
 from .settings import default_p2p_settings, normalize_p2p_settings
 
-# Startup and control operations verify or persist the configured seed set.
-_CONNECT_TIMEOUT_SECONDS = 900.0
-_REQUEST_TIMEOUT_SECONDS = 120.0
+# Startup and control operations can verify or persist the configured seed set.
+_CONNECT_TIMEOUT_SECONDS = 4 * 60 * 60.0
+_REQUEST_TIMEOUT_SECONDS = 4 * 60 * 60.0
 _STOP_TIMEOUT_SECONDS = 10.0
 _RESTART_LIMIT = 3
 _RESTART_WINDOW_SECONDS = 60.0
