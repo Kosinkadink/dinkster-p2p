@@ -44,6 +44,7 @@ from dinkster_p2p import (
 )
 from dinkster_p2p import runtime as p2p_runtime
 from dinkster_p2p.runtime import (
+    SidecarError,
     SidecarRuntime,
     StateLock,
     StateLockError,
@@ -216,6 +217,37 @@ def lease_fixtures(tmp_path: Path) -> tuple[DownloadLease, SeedLease]:
         }
     )
     return download, seed
+
+
+def test_restored_seed_renews_authority_without_rebinding_bytes(tmp_path: Path) -> None:
+    _download, seed = lease_fixtures(tmp_path)
+    arguments = {
+        "state_root": tmp_path / "vault" / ".p2p",
+        "vault_root": tmp_path / "vault",
+        "installation_root": None,
+        "settings": enabled_settings(seeding=True),
+    }
+    original = SidecarRuntime(**arguments)
+    try:
+        original.grant(seed.to_wire(), "seed")
+    finally:
+        original.close()
+
+    restored = SidecarRuntime(**arguments)
+    renewed = replace(
+        seed,
+        grant_ids=(INTERNET_SEED_GRANT_ID,),
+        expires_at=seed.expires_at + 60,
+    )
+    try:
+        restored.grant(renewed.to_wire(), "seed")
+        assert restored._leases[seed.lease_id] == renewed  # noqa: SLF001
+        runtime = restored._torrent_for_digest(seed.digest)  # noqa: SLF001
+        assert runtime is not None and runtime.lease == renewed
+        with pytest.raises(SidecarError, match="different lease"):
+            restored.grant(replace(renewed, local_path=tmp_path / "other").to_wire(), "seed")
+    finally:
+        restored.close()
 
 
 def test_lease_contracts_are_closed_and_confine_download_staging(tmp_path: Path) -> None:

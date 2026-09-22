@@ -17,7 +17,7 @@ import stat
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -1873,7 +1873,19 @@ class SidecarRuntime:
         ):
             raise SidecarError("download lease peer hint is outside the active LAN")
         existing = self._leases.get(lease.lease_id)
-        if existing is not None and existing != lease:
+        renewing_seed = bool(
+            existing is not None
+            and existing != lease
+            and isinstance(existing, SeedLease)
+            and isinstance(lease, SeedLease)
+            and replace(
+                existing,
+                grant_ids=lease.grant_ids,
+                expires_at=lease.expires_at,
+            )
+            == lease
+        )
+        if existing is not None and existing != lease and not renewing_seed:
             raise SidecarError("leaseId is already bound to a different lease")
         if lease.scope == "lan-and-internet" and any(
             current.lease_id != lease.lease_id
@@ -1966,6 +1978,8 @@ class SidecarRuntime:
         activated_runtime = shared_runtime is None
         if shared_runtime is not None and isinstance(shared_runtime.lease, type(lease)):
             runtime = shared_runtime
+            if renewing_seed:
+                runtime.lease = lease
         else:
             try:
                 runtime = shared_runtime or self._activate_lease(
@@ -1977,7 +1991,7 @@ class SidecarRuntime:
                 if global_handle is not None and self._global is not None:
                     self._global.unshare_with_lan(lease, global_handle)
                 raise
-        if existing is None:
+        if existing is None or renewing_seed:
             self._leases[lease.lease_id] = lease
         try:
             if (
@@ -1991,6 +2005,9 @@ class SidecarRuntime:
         except BaseException:
             if existing is None:
                 self._leases.pop(lease.lease_id, None)
+            elif renewing_seed:
+                self._leases[lease.lease_id] = existing
+                runtime.lease = existing
             if global_handle is not None:
                 self._torrents.pop(lease.lease_id, None)
                 if self._global is not None:
