@@ -19,9 +19,9 @@ from dinkster_assets import (
     AssetError,
     AssetVault,
     P2PLocalFileMapping,
-    derive_p2p_descriptor,
 )
 from dinkster_assets.p2p_global import GlobalP2PCounters, GlobalP2PCounterStore
+from dinkster_assets.p2p_storage import verified_p2p_seed_descriptor
 
 from .contracts import DownloadLease, P2PLease, SeedLease
 
@@ -330,7 +330,9 @@ class GlobalTransferController:
                     P2P_FORMAT_POLICY_VERSION,
                 )
                 local_path = mapping.require_current()
-                derived = derive_p2p_descriptor(local_path)
+                derived = verified_p2p_seed_descriptor(
+                    self._vault_root, lease.digest, lease.size_bytes, local_path
+                )
             except (AssetError, OSError) as error:
                 raise GlobalTransferError(
                     f"seed mapping is not safe and current: {error}"
@@ -341,6 +343,8 @@ class GlobalTransferController:
                 or derived.descriptor != lease.descriptor
             ):
                 raise GlobalTransferError("seed bytes no longer match the authorized descriptor")
+            # Failed seed verification must not download repairs into the source file.
+            params.flags |= self._lt.torrent_flags.seed_mode | self._lt.torrent_flags.upload_mode
             metainfo: dict[bytes, object] = {b"info": self._lt.bdecode(derived.info)}
             if derived.piece_layer:
                 metainfo[b"piece layers"] = {

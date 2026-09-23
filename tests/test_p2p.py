@@ -42,15 +42,59 @@ from dinkster_p2p import (
     seed_lease_from_wire,
     select_libtorrent_artifact,
 )
+from dinkster_p2p import manager as p2p_manager
 from dinkster_p2p import runtime as p2p_runtime
+from dinkster_p2p.global_leases import _AUTHORITY, AuthorizedGlobalLease
 from dinkster_p2p.runtime import (
+    SidecarError,
     SidecarRuntime,
     StateLock,
     StateLockError,
 )
+from tests.p2p_global_fixtures import build_provider_fixture
 
 SEED_GRANT_ID = "a" * 64
 INTERNET_SEED_GRANT_ID = "b" * 64
+
+
+def test_sidecar_startup_and_operations_use_four_hour_bounds() -> None:
+    assert p2p_manager._CONNECT_TIMEOUT_SECONDS == 4 * 60 * 60
+    assert p2p_manager._REQUEST_TIMEOUT_SECONDS == 4 * 60 * 60
+
+
+def test_global_seed_expiry_renewal_does_not_revoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        fixture = build_provider_fixture(tmp_path / "fixture")
+        current = fixture.authorizations()[0]
+        later = fixture.observed_at + 60
+        monkeypatch.setattr("dinkster_p2p.global_leases.time.time", lambda: later)
+        renewed = AuthorizedGlobalLease(
+            replace(current.lease, expires_at=current.lease.expires_at + 60),
+            current.trackers,
+            _AUTHORITY,
+        )
+        manager = P2PSidecarManager(vault_root=tmp_path / "vault")
+        internal = cast(Any, manager)
+        operations: list[str] = []
+
+        async def request(operation: str, _body: object) -> dict[str, Any]:
+            operations.append(operation)
+            return {}
+
+        internal._process = object()
+        internal._request_with_recovery_locked = request
+        await manager.reconcile_global((current,))
+        operations.clear()
+
+        result = await manager.reconcile_global((renewed,))
+
+        assert result == {"granted": (renewed.lease.lease_id,), "revoked": ()}
+        assert operations == ["grant-global"]
+        assert internal._global_authorizations == {renewed.lease.lease_id: renewed}
+
+    asyncio.run(scenario())
 
 
 def enabled_settings(*, downloads: bool = False, seeding: bool = False) -> dict[str, object]:
@@ -147,6 +191,8 @@ def test_p2p_defaults_disable_transport_with_budgets() -> None:
         "internetSeedRatio": 1.0,
         "internetSeedTimeSeconds": 86_400,
         "stagingBudgetBytes": 64 * 1024**3,
+        "maxActiveSeeds": 64,
+        "listenPort": 0,
     }
     assert len(LIBTORRENT_ARTIFACTS) == 8
     assert {key[0] for key in LIBTORRENT_ARTIFACTS} == {"linux", "win32", "darwin"}
@@ -214,6 +260,37 @@ def lease_fixtures(tmp_path: Path) -> tuple[DownloadLease, SeedLease]:
         }
     )
     return download, seed
+
+
+def test_restored_seed_renews_authority_without_rebinding_bytes(tmp_path: Path) -> None:
+    _download, seed = lease_fixtures(tmp_path)
+    arguments = {
+        "state_root": tmp_path / "vault" / ".p2p",
+        "vault_root": tmp_path / "vault",
+        "installation_root": None,
+        "settings": enabled_settings(seeding=True),
+    }
+    original = SidecarRuntime(**arguments)
+    try:
+        original.grant(seed.to_wire(), "seed")
+    finally:
+        original.close()
+
+    restored = SidecarRuntime(**arguments)
+    renewed = replace(
+        seed,
+        grant_ids=(INTERNET_SEED_GRANT_ID,),
+        expires_at=seed.expires_at + 60,
+    )
+    try:
+        restored.grant(renewed.to_wire(), "seed")
+        assert restored._leases[seed.lease_id] == renewed  # noqa: SLF001
+        runtime = restored._torrent_for_digest(seed.digest)  # noqa: SLF001
+        assert runtime is not None and runtime.lease == renewed
+        with pytest.raises(SidecarError, match="different lease"):
+            restored.grant(replace(renewed, local_path=tmp_path / "other").to_wire(), "seed")
+    finally:
+        restored.close()
 
 
 def test_lease_contracts_are_closed_and_confine_download_staging(tmp_path: Path) -> None:

@@ -14,9 +14,17 @@ _BIND_ERRORS = frozenset({errno.EACCES, errno.EADDRINUSE, 10013, 10048})
 _LOG = logging.getLogger(__name__)
 
 
-def select_listen_port(address: str, excluded: frozenset[int] = frozenset()) -> int:
+def select_listen_port(
+    address: str, excluded: frozenset[int] = frozenset(), *, requested_port: int = 0
+) -> int:
     # TCP port-zero allocation can walk an entire UDP-excluded Windows range.
-    candidates = random.SystemRandom().sample(range(49152, 65536), _PROBE_ATTEMPTS)
+    if requested_port in excluded:
+        raise OSError(f"requested port {requested_port} has undrained native alert history")
+    candidates = (
+        [requested_port]
+        if requested_port
+        else random.SystemRandom().sample(range(49152, 65536), _PROBE_ATTEMPTS)
+    )
     last_error: OSError | None = None
     for port in candidates:
         if port in excluded:
@@ -50,6 +58,7 @@ class ListenerBindings:
         self._report_error = report_error
         self._template = ""
         self._ports: dict[str, int | None] = {}
+        self._requested: dict[str, int] = {}
         self._attempts: dict[str, int] = {}
         # Native alerts have no generation; reused ports could accept stale successes.
         self._used: set[int] = set()
@@ -60,19 +69,38 @@ class ListenerBindings:
         if template != self._template:
             self._template = template
             self._ports = {}
+            self._requested = {}
             self._attempts = {}
             self._current_used.clear()
             self._tcp_bound.clear()
             for target in filter(None, template.split(",")):
-                address, _port = target.rsplit(":", 1)
+                address, port = target.rsplit(":", 1)
                 self._ports[address] = None
+                self._requested[address] = int(port.removesuffix("l"))
                 self._attempts[address] = 1
                 self._select(address)
         return self.interfaces
 
+    def requires_closed_transition(self, template: str) -> bool:
+        """Return whether a different template reuses a fixed port from native history."""
+        return template != self._template and any(
+            int(target.rsplit(":", 1)[1].removesuffix("l")) in self._used
+            for target in filter(None, template.split(","))
+        )
+
     def _select(self, address: str) -> None:
         try:
-            port = select_listen_port(address, frozenset(self._used))
+            requested = self._requested[address]
+            # Distinct interfaces may share a fresh fixed port, but not old alert history.
+            port = (
+                select_listen_port(
+                    address,
+                    frozenset(self._used - self._current_used),
+                    requested_port=requested,
+                )
+                if requested
+                else select_listen_port(address, frozenset(self._used))
+            )
         except OSError as error:
             self._report_error(f"P2P listener closed on {address}: {error}")
         else:
@@ -117,7 +145,11 @@ class ListenerBindings:
             return False
         self._tcp_bound.discard((address, port))
         self._ports[address] = None
-        if error not in _BIND_ERRORS or self._attempts[address] >= _HANDOFF_ATTEMPTS:
+        if (
+            self._requested[address]
+            or error not in _BIND_ERRORS
+            or self._attempts[address] >= _HANDOFF_ATTEMPTS
+        ):
             self._report_error(
                 f"P2P listener closed on {address} after native bind failure {error}"
             )

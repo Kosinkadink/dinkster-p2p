@@ -128,7 +128,11 @@ def test_smoke_port_selection_is_bounded_and_preserves_unexpected_errors(
 
 
 def test_approved_artifact_records_match_the_lockfile() -> None:
-    lock = tomllib.loads((Path(__file__).parent.parent / "uv.lock").read_text("utf-8"))
+    root = Path(__file__).parent.parent
+    lock_path = root / "uv.lock"
+    if not lock_path.is_file():
+        lock_path = root / ".dinkster" / "uv.lock"
+    lock = tomllib.loads(lock_path.read_text("utf-8"))
     package = next(item for item in lock["package"] if item["name"] == "libtorrent")
     locked = {Path(urlparse(item["url"]).path).name: item for item in package["wheels"]}
     for artifact in LIBTORRENT_ARTIFACTS.values():
