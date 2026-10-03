@@ -347,6 +347,14 @@ def test_delayed_sparse_hash_failure_does_not_fail_a_pending_piece(
     assert not torrent.stopped
     assert removed == []
 
+    partial.write_piece(0, (tmp_path / "download.bin").read_bytes())
+    runtime._handle_alert(HashFailedAlert())
+
+    assert torrent.state == "failed"
+    assert torrent.error == "hash for piece 0 failed"
+    assert torrent.stopped
+    assert removed == [handle]
+
 
 def test_restored_seed_renews_authority_without_rebinding_bytes(tmp_path: Path) -> None:
     _download, seed = lease_fixtures(tmp_path)
