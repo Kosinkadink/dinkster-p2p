@@ -58,7 +58,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --project .dinkster --locked --package dinkster-p2p
+      - run: uv sync --project .dinkster --locked
       - run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
       - run: cp .dinkster/uv.lock uv.lock
         if: runner.os != 'Windows'
