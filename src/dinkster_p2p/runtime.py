@@ -1162,12 +1162,11 @@ class SidecarRuntime:
             isinstance(alert, self._lt.hash_failed_alert)
             and isinstance(torrent.lease, DownloadLease)
             and torrent.handle.status().total_failed_bytes == 0
-            and alert.piece_index
-            not in torrent.durable_pieces | torrent.pending_flush | torrent.pending_reads
             and torrent.partial is not None
         ):
             # BEP 52 checking may reject preallocated bytes before hashes arrive;
-            # libtorrent counts failed peer data, but not existing disk data.
+            # libtorrent counts failed peer data, but not existing disk data. Alert
+            # categories can deliver that rejection after the piece finishes.
             try:
                 retained = torrent.partial.completed_ranges
             except (OSError, P2PStorageError) as error:
