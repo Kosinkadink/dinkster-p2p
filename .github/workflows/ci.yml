@@ -59,7 +59,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --project .dinkster --locked
-      - run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
+      - name: Install this checkout
+        if: runner.os != 'Windows'
+        run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
+      - name: Install this checkout
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $python = uv run --project .dinkster --no-sync python -c "import sys; print(sys.executable)"
+          uv pip install --python $python --no-cache --no-deps --no-sources --reinstall .
       - run: cp .dinkster/uv.lock uv.lock
         if: runner.os != 'Windows'
       - run: Copy-Item .dinkster/uv.lock uv.lock
