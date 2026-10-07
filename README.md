@@ -82,6 +82,9 @@ The `p2p` settings category is the only enable boundary. Both
 `downloadsEnabled` and `seedingEnabled` default to false with
 `scope=lan-and-internet`; saved choices remain authoritative. Use
 `dinkster-serve --disable-p2p` to start disabled without changing saved settings.
+Defaults, validation and the settings error type come from the network-free
+`dinkster_assets.p2p_settings` module. The sidecar's settings imports preserve
+that same API and do not define a second validator.
 Constructing a disabled host manager creates no directory, process, socket,
 or peer port. The host launches one sidecar when either capability becomes true and stops it
 when both return to false. Runtime settings writes still require the ordinary
