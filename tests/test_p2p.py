@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 
+import dinkster_assets.p2p_settings as shared_settings
 import pytest
 from dinkster_assets import AssetVault, derive_p2p_descriptor
 from dinkster_workers.boundary import read_frame as read_boundary_frame
@@ -26,6 +27,7 @@ from dinkster_p2p import (
     P2PLeaseError,
     P2PManagerConflict,
     P2PManagerError,
+    P2PSettingsError,
     P2PSidecarManager,
     SeedLease,
     UnsupportedLibtorrentRuntime,
@@ -48,6 +50,12 @@ from tests.p2p_global_fixtures import build_provider_fixture
 
 SEED_GRANT_ID = "a" * 64
 INTERNET_SEED_GRANT_ID = "b" * 64
+
+
+def test_settings_use_the_network_free_assets_authority() -> None:
+    assert default_p2p_settings is shared_settings.default_p2p_settings
+    assert normalize_p2p_settings is shared_settings.normalize_p2p_settings
+    assert P2PSettingsError is shared_settings.P2PSettingsError
 
 
 def test_sidecar_startup_and_operations_use_four_hour_bounds() -> None:
