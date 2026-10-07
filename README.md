@@ -153,3 +153,8 @@ The runtime artifact is pinned to `libtorrent==2.1.1`. Linux x86-64/AArch64,
 Windows AMD64, and macOS ARM64 wheels for CPython 3.12 and 3.13 are recorded
 in `dinkster_p2p.artifacts`; unsupported runtime combinations fail before a
 session opens a listening socket.
+
+## License and security
+
+This Dinkster component is licensed under [GPL-3.0](LICENSE). Report suspected
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
