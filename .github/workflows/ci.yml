@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  DINKSTER_CORE_REVISION: 06250398364611fa49316c006ba4f54877aca353
+  DINKSTER_CORE_REVISION: 41f89af38a15dcaec5dc99431bbc86cf738660e8
 
 jobs:
   validation:
@@ -32,7 +32,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv sync --project .dinkster --locked
+      - run: uv sync --project .dinkster --locked --extra p2p
       - run: uv pip install --python .dinkster/.venv --no-cache --no-deps --no-sources --reinstall .
       - run: uvx ruff==0.15.22 format --check src tests
       - run: uvx ruff==0.15.22 check src tests
@@ -60,7 +60,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --project .dinkster --locked
+      - run: uv sync --project .dinkster --locked --extra p2p
       - name: Install this checkout
         if: runner.os != 'Windows'
         run: uv pip install --python .dinkster/.venv/bin/python --no-cache --no-deps --no-sources --reinstall .
